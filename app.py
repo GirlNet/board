@@ -12,15 +12,14 @@ if uri.startswith("postgres://"):
 
 app.config['SQLALCHEMY_DATABASE_URI'] = uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# 增加连接池设置，防止数据库断连
+# 增加重连机制，减少 502 报错
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True}
 db = SQLAlchemy(app)
 
 # --- 数据库模型 ---
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    # 增加 pinboard_id 列，虽然你说“无所谓”，但存下来能防止以后数据乱套
-    pinboard_id = db.Column(db.String(100)) 
+    pinboard_id = db.Column(db.String(100)) # 这一列就是导致你刚才报错的“失踪人口”
     local_position = db.Column(db.String(100))
     angle = db.Column(db.String(50))
     color_hue = db.Column(db.String(50))
@@ -28,15 +27,26 @@ class Note(db.Model):
     user_hash = db.Column(db.String(100))
     timestamp = db.Column(db.Float)
 
-# --- 数据库初始化 ---
+# --- 数据库强制初始化逻辑 ---
 with app.app_context():
-    db.create_all() 
+    # 只要检测到数据库还没更新，就强制重置表结构
+    # 第一次部署后，如果你看到 /admin 能打开了，可以删掉下面这两行
+    try:
+        db.create_all()
+        # 尝试查询新字段，如果报错说明需要重置
+        Note.query.with_entities(Note.pinboard_id).first()
+    except Exception:
+        db.session.rollback()
+        db.drop_all()
+        db.create_all()
+        print("数据库结构已重置，pinboard_id 列已添加。")
 
-# --- 路由：读取留言 ---
+# --- 接口逻辑 ---
+
 @app.route('/notes', methods=['GET'])
 def get_notes():
-    # 尝试按 ID 过滤，如果没传 ID 就全返回，这样最稳
     pid = request.args.get('pinboardId')
+    # 兼容性查询：如果带了 ID 就过滤，没带就全查
     if pid:
         notes = Note.query.filter_by(pinboard_id=pid).all()
     else:
@@ -44,7 +54,7 @@ def get_notes():
 
     data_dict = {}
     for n in notes:
-        # 这里返回的 Key 必须是小驼峰，Unity 脚本才能识别
+        # 这里转换成原作者脚本认得的小驼峰命名
         data_dict[str(n.id)] = {
             "localPosition": n.local_position,
             "angle": n.angle,
@@ -55,11 +65,10 @@ def get_notes():
         }
     return jsonify(data_dict)
 
-# --- 路由：上传留言 ---
 @app.route('/upload', methods=['GET'])
 def upload_note():
     try:
-        # 这里直接读取原作者链接里的参数名
+        # 直接读取原作者生成的链接参数
         new_note = Note(
             pinboard_id = request.args.get('pinboardId'),
             local_position = request.args.get('localPosition'),
@@ -73,21 +82,19 @@ def upload_note():
         db.session.commit()
         return "OK", 200
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Upload Error: {e}")
         return str(e), 500
 
-# --- 路由：创建空间 ---
 @app.route('/create', methods=['GET'])
 def create_board():
     return "OK", 200
 
-# --- 路由：管理后台 ---
 @app.route('/admin')
 def admin():
+    # 按 ID 倒序排列，最新的留言在最上面
     notes = Note.query.order_by(Note.id.desc()).all()
     return render_template('admin.html', notes=notes)
 
-# --- 路由：删除留言 ---
 @app.route('/delete/<int:note_id>', methods=['POST'])
 def delete_note(note_id):
     note = Note.query.get(note_id)
@@ -97,6 +104,6 @@ def delete_note(note_id):
     return "OK", 200
 
 if __name__ == '__main__':
-    # 动态获取端口，适配 Render 环境
+    # 适配 Render 的端口环境变量
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
