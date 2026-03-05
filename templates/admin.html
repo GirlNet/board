@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>VRChat 留言板管理后台</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f9; }
+        table { width: 100%; border-collapse: collapse; background: white; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #007bff; color: white; }
+        tr:hover { background-color: #f1f1f1; }
+        .delete-btn { color: white; background-color: #ff4d4d; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px; }
+        .delete-btn:hover { background-color: #cc0000; }
+    </style>
+</head>
+<body>
+    <h2>VRChat 留言板管理后台</h2>
+    <p>提示：删除操作不可撤销。</p>
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>内容</th>
+                <th>用户Hash</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for note in notes %}
+            <tr>
+                <td>{{ note.id }}</td>
+                <td>{{ note.content }}</td>
+                <td><small>{{ note.user_hash }}</small></td>
+                <td>
+                    <button class="delete-btn" onclick="deleteNote('{{ note.id }}')">删除</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <script>
+        function deleteNote(id) {
+            if (confirm('确定要删除这条留言吗？')) {
+                fetch('/delete/' + id, { method: 'POST' })
+                .then(response => {
+                    if (response.ok) {
+                        location.reload();
+                    } else {
+                        alert('删除失败');
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>
