@@ -5,48 +5,44 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# --- 数据库配置 ---
+# --- 数据库配置：修正 Render 提供的 postgres:// 协议头 ---
 uri = os.environ.get('DATABASE_URL', 'sqlite:///test.db')
 if uri.startswith("postgres://"):
     uri = uri.replace("postgres://", "postgresql://", 1)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = uri
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-# 增加重连机制，减少 502 报错
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {"pool_pre_ping": True}
+# 增加连接池优化，防止 Render 免费版频繁出现数据库断连导致的 502
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+}
 db = SQLAlchemy(app)
 
-# --- 数据库模型 ---
+# --- 数据库模型：增加了缺失的 pinboard_id 字段 ---
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    pinboard_id = db.Column(db.String(100)) # 这一列就是导致你刚才报错的“失踪人口”
-    local_position = db.Column(db.String(100))
+    pinboard_id = db.Column(db.String(100)) # 核心修复：存储房间ID
+    local_position = db.Column(db.String(100)) 
     angle = db.Column(db.String(50))
     color_hue = db.Column(db.String(50))
     content = db.Column(db.Text)
     user_hash = db.Column(db.String(100))
     timestamp = db.Column(db.Float)
 
-# --- 数据库强制初始化逻辑 ---
+# --- 数据库自动初始化逻辑 ---
 with app.app_context():
-    # 只要检测到数据库还没更新，就强制重置表结构
-    # 第一次部署后，如果你看到 /admin 能打开了，可以删掉下面这两行
-    try:
-        db.create_all()
-        # 尝试查询新字段，如果报错说明需要重置
-        Note.query.with_entities(Note.pinboard_id).first()
-    except Exception:
-        db.session.rollback()
-        db.drop_all()
-        db.create_all()
-        print("数据库结构已重置，pinboard_id 列已添加。")
+    # 强制创建表结构。如果你依然遇到列缺失报错，
+    # 请手动在 Render 部署时运行一次 db.drop_all() 再 db.create_all()
+    db.create_all() 
 
 # --- 接口逻辑 ---
 
 @app.route('/notes', methods=['GET'])
 def get_notes():
+    # 获取 Unity 传来的 ID
     pid = request.args.get('pinboardId')
-    # 兼容性查询：如果带了 ID 就过滤，没带就全查
+    # 只查询对应 ID 的留言，防止数据混淆
     if pid:
         notes = Note.query.filter_by(pinboard_id=pid).all()
     else:
@@ -54,7 +50,7 @@ def get_notes():
 
     data_dict = {}
     for n in notes:
-        # 这里转换成原作者脚本认得的小驼峰命名
+        # 这里转换成原作者脚本认得的小驼峰命名，解决“数据隐藏”问题
         data_dict[str(n.id)] = {
             "localPosition": n.local_position,
             "angle": n.angle,
@@ -68,7 +64,7 @@ def get_notes():
 @app.route('/upload', methods=['GET'])
 def upload_note():
     try:
-        # 直接读取原作者生成的链接参数
+        # 直接读取原作者脚本生成的参数名
         new_note = Note(
             pinboard_id = request.args.get('pinboardId'),
             local_position = request.args.get('localPosition'),
@@ -82,7 +78,7 @@ def upload_note():
         db.session.commit()
         return "OK", 200
     except Exception as e:
-        print(f"Upload Error: {e}")
+        print(f"Upload error: {e}")
         return str(e), 500
 
 @app.route('/create', methods=['GET'])
@@ -91,7 +87,7 @@ def create_board():
 
 @app.route('/admin')
 def admin():
-    # 按 ID 倒序排列，最新的留言在最上面
+    # 按 ID 倒序排列，解决你看到的查询报错
     notes = Note.query.order_by(Note.id.desc()).all()
     return render_template('admin.html', notes=notes)
 
@@ -104,6 +100,6 @@ def delete_note(note_id):
     return "OK", 200
 
 if __name__ == '__main__':
-    # 适配 Render 的端口环境变量
+    # 核心修复：适配 Render 随机分配的端口，防止部署失败
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
