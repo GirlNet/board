@@ -17,24 +17,19 @@ db = SQLAlchemy(app)
 # --- 2. 数据库模型 ---
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    local_position = db.Column(db.String(100)) # 修复 UndefinedColumn 报错
+    local_position = db.Column(db.String(100)) # 确保与 SQL 报错中的字段一致
     angle = db.Column(db.String(50))
     color_hue = db.Column(db.String(50))
     content = db.Column(db.Text)
     user_hash = db.Column(db.String(100))
     timestamp = db.Column(db.Float)
 
-# --- 3. 数据库初始化 (自动修复逻辑) ---
+# --- 3. 强制重置数据库 (修复的关键) ---
 with app.app_context():
-    try:
-        # 尝试查询。如果字段不存在会报错，此时自动重置表
-        db.session.execute(db.select(Note).limit(1))
-    except Exception:
-        db.session.rollback()
-        db.drop_all() 
-        db.create_all()
-        print("Database tables reset to fix column issues.")
+    # 强制执行删除并重新创建，这会解决 UndefinedColumn 问题
+    db.drop_all() 
     db.create_all()
+    print("Database has been force-reset with new columns.")
 
 # --- 4. 路由定义 ---
 
@@ -70,52 +65,25 @@ def upload_note():
     except Exception as e:
         return str(e), 500
 
-@app.route('/create', methods=['GET'])
-def create_board():
-    return "Created", 201
-
-# --- 5. Admin 管理后台 (已修复引号闭合问题) ---
 @app.route('/admin')
 def admin():
     notes = Note.query.order_by(Note.id.desc()).all()
-    
-    # 核心修复点：确保三引号 """ 正确闭合
     html_template = """
     <!DOCTYPE html>
     <html>
-    <head>
-        <title>留言板管理后台</title>
-        <style>
-            body { font-family: sans-serif; margin: 40px; background: #f4f4f9; color: #333; }
-            .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-            th, td { border: 1px solid #eee; padding: 12px; text-align: left; }
-            th { background-color: #5865f2; color: white; }
-            tr:hover { background-color: #f1f1f1; }
-            .delete-link { color: #ff4b4b; text-decoration: none; font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>VRChat 留言板管理</h1>
-            <p>当前记录: {{ notes|length }} 条</p>
-            <table>
-                <tr>
-                    <th>ID</th>
-                    <th>内容</th>
-                    <th>用户哈希</th>
-                    <th>操作</th>
-                </tr>
-                {% for note in notes %}
-                <tr>
-                    <td>{{ note.id }}</td>
-                    <td>{{ note.content }}</td>
-                    <td>{{ note.user_hash }}</td>
-                    <td><a href="/delete/{{ note.id }}" class="delete-link" onclick="return confirm('确定删除？')">删除</a></td>
-                </tr>
-                {% endfor %}
-            </table>
-        </div>
+    <head><title>管理后台</title></head>
+    <body style="font-family:sans-serif; padding:20px;">
+        <h1>留言板管理</h1>
+        <table border="1" style="width:100%; border-collapse:collapse;">
+            <tr><th>ID</th><th>内容</th><th>操作</th></tr>
+            {% for note in notes %}
+            <tr>
+                <td>{{ note.id }}</td>
+                <td>{{ note.content }}</td>
+                <td><a href="/delete/{{ note.id }}">删除</a></td>
+            </tr>
+            {% endfor %}
+        </table>
     </body>
     </html>
     """
